@@ -13,7 +13,12 @@
     "devbug": false,
     "version": "0.0.1",
     "preview": "desktop",
-    "platform": ["1-1", "1-2", "2-1", "2-2"],
+    "platform": [
+        "1-1",
+        "1-2",
+        "2-1",
+        "2-2"
+    ],
     "width": 800,
     "height": 600,
     "desc": "",
@@ -156,14 +161,14 @@
         }
     },
     "ios": {
-        "name": "PakePlus",
-        "showName": "PakePlus",
-        "version": "0.0.1",
-        "webUrl": "https://juejin.cn/",
-        "id": "com.xiaoshen.pakeplus.ios",
+        "name": "JingDiaoTuKu",
+        "showName": "小杨精雕",
+        "version": "1.0.0",
+        "webUrl": "https://pc.715881989.xyz",
+        "id": "xyz.715881989.pc",
         "icon": "./app-icon.png",
-        "desc": "Package for personal use only, please do not use for commercial purposes（打包仅限个人使用，请勿传播或商业用途）",
-        "pubBody": "Package for personal use only, please do not use for commercial purposes（打包仅限个人使用，请勿传播或商业用途）",
+        "desc": "小杨精雕图库客户端",
+        "pubBody": "小杨精雕图库客户端",
         "isHtml": false,
         "debug": false,
         "safeArea": "all"
