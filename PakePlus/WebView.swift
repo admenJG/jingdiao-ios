@@ -208,13 +208,42 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
         }
     }
 
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // provisional failure = initial connection failed (DNS / no network / blocked)
+        guard !didFinishMainFrameOnce else { return }
+        didFinishMainFrameOnce = true
+        print("PakePlus provisional load failed: \(error.localizedDescription)")
+        showLoadError(on: webView, message: error.localizedDescription)
+        DispatchQueue.main.async { [onLoadFinished] in
+            onLoadFinished?()
+        }
+    }
+
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         // avoid certain loading failures causing it to stay on the launch screen/loading
         guard !didFinishMainFrameOnce else { return }
         didFinishMainFrameOnce = true
-
+        print("PakePlus load failed: \(error.localizedDescription)")
+        showLoadError(on: webView, message: error.localizedDescription)
         DispatchQueue.main.async { [onLoadFinished] in
             onLoadFinished?()
+        }
+    }
+
+    /// show readable error on screen instead of blank white
+    private func showLoadError(on view: UIView, message: String) {
+        DispatchQueue.main.async {
+            let label = UILabel()
+            label.numberOfLines = 0
+            label.textAlignment = .center
+            label.textColor = .label
+            label.backgroundColor = .systemBackground
+            label.font = .systemFont(ofSize: 15, weight: .medium)
+            let clean = message.replacingOccurrences(of: "file://", with: "")
+            label.text = "⚠️ 页面加载失败\n\n\(clean)\n\n请确认手机能访问\nhttps://pc.715881989.xyz"
+            label.frame = view.bounds
+            label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(label)
         }
     }
 
