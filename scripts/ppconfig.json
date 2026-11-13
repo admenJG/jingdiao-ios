@@ -170,7 +170,7 @@
         "desc": "小杨精雕图库客户端",
         "pubBody": "小杨精雕图库客户端",
         "isHtml": false,
-        "debug": true,
+        "debug": false,
         "safeArea": "all"
     },
     "android": {
