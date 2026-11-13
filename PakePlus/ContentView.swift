@@ -44,16 +44,16 @@ struct ContentView: View {
                     Button(action: {
                         webViewRef?.goBack()
                     }) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 20, weight: .medium))
+                        Text("返回")
+                            .font(.system(size: 16, weight: .medium))
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                     Divider().frame(height: 22)
                     Button(action: {
                         webViewRef?.reload()
                     }) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 19, weight: .medium))
+                        Text("刷新")
+                            .font(.system(size: 16, weight: .medium))
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                     Divider().frame(height: 22)
@@ -62,8 +62,8 @@ struct ContentView: View {
                             webViewRef?.load(URLRequest(url: u))
                         }
                     }) {
-                        Image(systemName: "house.fill")
-                            .font(.system(size: 19, weight: .medium))
+                        Text("首页")
+                            .font(.system(size: 16, weight: .medium))
                             .frame(maxWidth: .infinity, minHeight: 46)
                     }
                 }
