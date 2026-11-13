@@ -52,6 +52,20 @@ struct WebView: UIViewRepresentable {
         webView.scrollView.backgroundColor = .clear
         // JS bridge: blob download
         webView.configuration.userContentController.add(context.coordinator, name: "blobDownload")
+        // SPA 路由兜底监听（hashchange / popstate）→ 转发当前地址给原生，补全返回栈
+        let routeScript = WKUserScript(
+            source: """
+            (function(){
+              function post(){ try{ window.webkit.messageHandlers.routeChanged.postMessage(location.href); }catch(e){} }
+              window.addEventListener('hashchange', post);
+              window.addEventListener('popstate', post);
+            })();
+            """,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        webView.configuration.userContentController.addUserScript(routeScript)
+        webView.configuration.userContentController.add(context.coordinator, name: "routeChanged")
 
         // debug script
         if debug, let debugScript = WebView.loadJSFile(named: "vConsole") {
@@ -172,15 +186,20 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
         }
     }
 
+    /// 入栈（去重）：KVO 与 JS 路由监听都走这里，重复上报会被去重
+    private func pushURL(_ u: URL) {
+        if historyStack.last != u {
+            historyStack.append(u)
+        }
+    }
+
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
         guard keyPath == "URL" else {
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
             return
         }
         if let u = observedWebView?.url {
-            if historyStack.last != u {
-                historyStack.append(u)
-            }
+            pushURL(u)
         }
     }
 
@@ -386,6 +405,14 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
     // MARK: - WKScriptMessageHandler (blob download bridge)
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // SPA 路由兜底：AList 等用 hash/history 路由时，纯 hash 变化不一定触发 WKWebView 的 URL-KVO，
+        // 用页面内 hashchange/popstate 事件补报当前地址，确保返回键在网盘里能逐级退。
+        if message.name == "routeChanged" {
+            if let s = message.body as? String, let u = URL(string: s) {
+                pushURL(u)
+            }
+            return
+        }
         guard message.name == "blobDownload" else { return }
         guard let body = message.body as? [String: Any] else { return }
 
