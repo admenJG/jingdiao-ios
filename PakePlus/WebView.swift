@@ -243,7 +243,9 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
             label.backgroundColor = .systemBackground
             label.font = .systemFont(ofSize: 15, weight: .medium)
             let clean = message.replacingOccurrences(of: "file://", with: "")
-            label.text = "⚠️ 页面加载失败\n\n\(clean)\n\n请确认手机能访问\nhttps://pc.715881989.xyz"
+            // 图库首页地址以 scripts/ppconfig.json 的 ios.webUrl 为准；
+            // 换域名时这里必须同步，否则报错页会把人指向一个已经不用的旧域名。
+            label.text = "⚠️ 页面加载失败\n\n\(clean)\n\n请确认手机能访问\nhttps://tk.715881989.xyz"
             label.frame = view.bounds
             label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(label)
