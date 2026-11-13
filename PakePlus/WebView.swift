@@ -19,6 +19,8 @@ struct WebView: UIViewRepresentable {
     let onLoadFinished: (() -> Void)?
     // userAgent
     let userAgent = Bundle.main.object(forInfoDictionaryKey: "USERAGENT") as? String ?? ""
+    // 对外暴露 WKWebView 实例，供原生工具栏调用 goBack / reload / load（默认空绑定，不影响其它调用点）
+    var webViewRef: Binding<WKWebView?> = .constant(nil)
 
     func makeUIView(context: Context) -> WKWebView {
         let webConfiguration = WKWebViewConfiguration()
@@ -114,6 +116,7 @@ struct WebView: UIViewRepresentable {
 
         context.coordinator.prepareWebGeolocationAuthorization()
 
+        webViewRef.wrappedValue = webView
         return webView
     }
 

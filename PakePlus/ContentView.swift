@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import WebKit
 
 struct ContentView: View {
     // read value from info
@@ -18,6 +19,8 @@ struct ContentView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @State private var isWebLoaded: Bool = false
+    // 持有 WKWebView 实例，供底部工具栏控制返回/刷新/回首页
+    @State private var webViewRef: WKWebView?
 
     var body: some View {
         // BottomMenuView()
@@ -28,11 +31,50 @@ struct ContentView: View {
                 debug: debug,
                 onLoadFinished: {
                     isWebLoaded = true
-                }
+                },
+                webViewRef: $webViewRef
             )
             .ignoresSafeArea(edges: [.all])
             .allowsHitTesting(isWebLoaded)
             
+            // 底部导航工具栏：返回 / 刷新 / 首页（常驻，解决「进下一层回不来」）
+            VStack {
+                Spacer()
+                HStack(spacing: 0) {
+                    Button(action: {
+                        webViewRef?.goBack()
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 20, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    Divider().frame(height: 22)
+                    Button(action: {
+                        webViewRef?.reload()
+                    }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 19, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    Divider().frame(height: 22)
+                    Button(action: {
+                        if let u = URL(string: webUrl) {
+                            webViewRef?.load(URLRequest(url: u))
+                        }
+                    }) {
+                        Image(systemName: "house.fill")
+                            .font(.system(size: 19, weight: .medium))
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                }
+                .foregroundColor(.primary)
+                .background(Color(.systemBackground))
+                .overlay(
+                    Rectangle().frame(height: 0.5).foregroundColor(Color(.systemGray4)),
+                    alignment: .top
+                )
+            }
+
             // loading screen
             if !isWebLoaded && launchImage {
                 Image("LaunchScreen")
