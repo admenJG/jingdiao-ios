@@ -194,7 +194,7 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
         if isMainFrame, shouldDownload(url: url) {
             decisionHandler(.cancel)
-            downloadFile(from: url)
+            downloadFile(from: url, in: webView)
             return
         }
 
@@ -449,69 +449,97 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
     }
 
     /// 使用 URLSession 下载文件并弹出系统分享面板，让用户保存到「文件」或其他 App
-    private func downloadFile(from url: URL) {
+    private func downloadFile(from url: URL, in webView: WKWebView) {
         print("start downloading file: \(url.absoluteString)")
         showHint("开始下载…")
-        // Cloudflare 的浏览器完整性检查会拦 CFNetwork 默认 UA（error code 1010），
-        // 这里显式用 Safari UA；/d/ 直链带 sign，不需要 Authorization。
-        var request = URLRequest(url: url)
-        request.setValue(
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-            forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 900
-        let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
-            if let error = error {
-                print("download failed: \(error.localizedDescription)")
-                self?.showHint("下载失败: \(error.localizedDescription)", ok: false)
-                return
+
+        // 图库 / E盘 / 工作区 的文件直链要带 tk_session 登录 cookie 才放行。
+        // WKWebView 的 cookie 在 WKHTTPCookieStore，URLSession.shared 用的是
+        // NSHTTPCookieStorage，两者不保证互通；不显式搬一次，点 .vs3d 下载到的
+        // 会是 403 或登录页 HTML（文件名对、内容是废的）。
+        let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+        cookieStore.getAllCookies { cookies in
+            var request = URLRequest(url: url)
+            // Cloudflare 浏览器完整性检查会拦 CFNetwork 默认 UA（error code 1010）
+            request.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent")
+            request.timeoutInterval = 900
+
+            let host = url.host?.lowercased() ?? ""
+            let pairs = cookies.filter { c in
+                let d = c.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return !d.isEmpty && (host == d || host.hasSuffix("." + d))
+            }.map { "\($0.name)=\($0.value)" }
+            if !pairs.isEmpty {
+                request.setValue(pairs.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+            }
+            cookies.forEach { HTTPCookieStorage.shared.setCookie($0) }
+
+            let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
+                if let error = error {
+                    print("download failed: \(error.localizedDescription)")
+                    self?.showHint("下载失败: \(error.localizedDescription)", ok: false)
+                    return
+                }
+
+                // 别把 403 / 登录页 / CF 拦截页当文件存下来
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    self?.showHint("下载失败: HTTP \(http.statusCode)，请在 App 内重新登录", ok: false)
+                    return
+                }
+                if let mime = response?.mimeType?.lowercased(), mime.contains("text/html") {
+                    self?.showHint("下载失败: 返回的是网页，请在 App 内重新登录", ok: false)
+                    return
+                }
+
+                guard let tempURL = tempURL else {
+                    print("download failed: temporary file not found")
+                    self?.showHint("下载失败: 未取到临时文件", ok: false)
+                    return
+                }
+
+                // 优先用原始链接里的中文文件名（AList /d/ 路径），避免天翼 302 之后
+                // 落到 UUID.vs3d，或 Content-Disposition 里的乱码名。
+                let originalName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+                let suggestedName = (response as? HTTPURLResponse)?
+                    .allHeaderFields["Content-Disposition"] as? String
+
+                let fileName: String
+                if !originalName.isEmpty && originalName.lowercased() != "d" {
+                    fileName = originalName
+                } else if let suggestedName,
+                          let range = suggestedName.range(of: "filename=")
+                {
+                    let namePart = String(suggestedName[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "\"; "))
+                    fileName = namePart.isEmpty ? "file" : namePart
+                } else {
+                    fileName = "file"
+                }
+
+                let fileManager = FileManager.default
+                let tempDir = fileManager.temporaryDirectory
+                let destinationURL = tempDir.appendingPathComponent(fileName)
+
+                // if file already exists, remove it
+                try? fileManager.removeItem(at: destinationURL)
+
+                do {
+                    try fileManager.moveItem(at: tempURL, to: destinationURL)
+                } catch {
+                    print("failed to move download file: \(error.localizedDescription)")
+                    return
+                }
+
+                print("download finished, temporary save path: \(destinationURL.path)")
+
+                DispatchQueue.main.async {
+                    self?.presentShareSheet(for: destinationURL)
+                }
             }
 
-            guard let tempURL = tempURL else {
-                print("download failed: temporary file not found")
-                self?.showHint("下载失败: 未取到临时文件", ok: false)
-                return
-            }
-
-            // 优先用原始链接里的中文文件名（AList /d/ 路径），避免天翼 302 之后
-            // 落到 UUID.vs3d，或 Content-Disposition 里的乱码名。
-            let originalName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
-            let suggestedName = (response as? HTTPURLResponse)?
-                .allHeaderFields["Content-Disposition"] as? String
-
-            let fileName: String
-            if !originalName.isEmpty && originalName.lowercased() != "d" {
-                fileName = originalName
-            } else if let suggestedName,
-                      let range = suggestedName.range(of: "filename=")
-            {
-                let namePart = String(suggestedName[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "\"; "))
-                fileName = namePart.isEmpty ? "file" : namePart
-            } else {
-                fileName = "file"
-            }
-
-            let fileManager = FileManager.default
-            let tempDir = fileManager.temporaryDirectory
-            let destinationURL = tempDir.appendingPathComponent(fileName)
-
-            // if file already exists, remove it
-            try? fileManager.removeItem(at: destinationURL)
-
-            do {
-                try fileManager.moveItem(at: tempURL, to: destinationURL)
-            } catch {
-                print("failed to move download file: \(error.localizedDescription)")
-                return
-            }
-
-            print("download finished, temporary save path: \(destinationURL.path)")
-
-            DispatchQueue.main.async {
-                self?.presentShareSheet(for: destinationURL)
-            }
+            task.resume()
         }
-
-        task.resume()
     }
 
     /// show a short on-screen hint (disappears after 2-3 seconds)
