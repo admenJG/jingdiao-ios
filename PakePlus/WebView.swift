@@ -21,6 +21,8 @@ struct WebView: UIViewRepresentable {
     let userAgent = Bundle.main.object(forInfoDictionaryKey: "USERAGENT") as? String ?? ""
     // 对外暴露 WKWebView 实例，供原生工具栏调用 goBack / reload / load（默认空绑定，不影响其它调用点）
     var webViewRef: Binding<WKWebView?> = .constant(nil)
+    // 对外暴露 Coordinator 实例，工具栏「返回/首页」直接调用它的自定义历史栈逻辑
+    var coordinatorRef: Binding<Coordinator?> = .constant(nil)
 
     func makeUIView(context: Context) -> WKWebView {
         let webConfiguration = WKWebViewConfiguration()
@@ -117,6 +119,8 @@ struct WebView: UIViewRepresentable {
         context.coordinator.prepareWebGeolocationAuthorization()
 
         webViewRef.wrappedValue = webView
+        context.coordinator.observe(webView)
+        coordinatorRef.wrappedValue = context.coordinator
         return webView
     }
 
@@ -151,6 +155,61 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
 
     // blob downloads
     private var blobDownloads: [String: BlobDownloadState] = [:]
+
+    // 自定义网页历史栈：AList 等单页应用（SPA）内部点文件夹只改 URL、不真跳转，
+    // 进不了 iOS 系统 back-forward 栈，导致原生「返回」键在网盘里失效。
+    // 这里用 KVO 监听 webView.url 变化自己记一本账，返回键按这本账逐级退。
+    private var observedWebView: WKWebView?
+    private var historyStack: [URL] = []
+    private var observingURL = false
+
+    /// 开始观察某个 webView 的 url 变化（只在首次调用时注册一次 KVO）
+    func observe(_ webView: WKWebView) {
+        observedWebView = webView
+        if !observingURL {
+            webView.addObserver(self, forKeyPath: "URL", options: [.new], context: nil)
+            observingURL = true
+        }
+    }
+
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+        guard keyPath == "URL" else {
+            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+            return
+        }
+        if let u = observedWebView?.url {
+            if historyStack.last != u {
+                historyStack.append(u)
+            }
+        }
+    }
+
+    /// 返回上一级：优先按自定义栈逐级退；栈不足时退回系统导航
+    func back() {
+        guard let wv = observedWebView else { return }
+        if historyStack.count > 1 {
+            historyStack.removeLast()
+            if let prev = historyStack.last {
+                wv.load(URLRequest(url: prev))
+                return
+            }
+        }
+        if wv.canGoBack {
+            wv.goBack()
+        }
+    }
+
+    /// 回首页并重置历史栈
+    func home(_ url: URL) {
+        historyStack = [url]
+        observedWebView?.load(URLRequest(url: url))
+    }
+
+    deinit {
+        if observingURL {
+            observedWebView?.removeObserver(self, forKeyPath: "URL")
+        }
+    }
 
     // disable zoom
     func viewForZooming(in scrollView: UIScrollView) -> UIView? {

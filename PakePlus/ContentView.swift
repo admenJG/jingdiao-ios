@@ -21,6 +21,8 @@ struct ContentView: View {
     @State private var isWebLoaded: Bool = false
     // 持有 WKWebView 实例，供底部工具栏控制返回/刷新/回首页
     @State private var webViewRef: WKWebView?
+    // 持有 Coordinator 实例，工具栏「返回/首页」调用它的自定义历史栈
+    @State private var coordinatorRef: Coordinator?
 
     var body: some View {
         // BottomMenuView()
@@ -32,7 +34,8 @@ struct ContentView: View {
                 onLoadFinished: {
                     isWebLoaded = true
                 },
-                webViewRef: $webViewRef
+                webViewRef: $webViewRef,
+                coordinatorRef: $coordinatorRef
             )
             .ignoresSafeArea(edges: [.all])
             .allowsHitTesting(isWebLoaded)
@@ -42,7 +45,7 @@ struct ContentView: View {
                 Spacer()
                 HStack(spacing: 0) {
                     Button(action: {
-                        webViewRef?.goBack()
+                        coordinatorRef?.back()
                     }) {
                         Text("返回")
                             .font(.system(size: 16, weight: .medium))
@@ -59,7 +62,7 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                     Button(action: {
                         if let u = URL(string: webUrl) {
-                            webViewRef?.load(URLRequest(url: u))
+                            coordinatorRef?.home(u)
                         }
                     }) {
                         Text("首页")
