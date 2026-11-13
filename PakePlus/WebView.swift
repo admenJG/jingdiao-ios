@@ -188,8 +188,11 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
             return
         }
 
-        // only trigger download when user clicks link, other navigation load normally
-        if navigationAction.navigationType == .linkActivated, shouldDownload(url: url) {
+        // AList / 图库 的「下载」可能是 <a> 点击，也可能由 JS(location.href / window.open) 触发，
+        // 后者 navigationType 是 .other，只认 .linkActivated 会静默失效（点了完全没反应）。
+        // 只对主框架导航拦截，iframe / 子资源不受影响。
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if isMainFrame, shouldDownload(url: url) {
             decisionHandler(.cancel)
             downloadFile(from: url)
             return
@@ -248,6 +251,19 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
     }
 
     // MARK: - WKUIDelegate: system vs web permissions
+
+    // target="_blank" / window.open：WKUIDelegate 默认返回 nil 会被静默忽略，
+    // AList 的「下载」按钮点了完全没反应多半就卡在这里。
+    // 改成在当前 WebView 里加载，再交给 decidePolicyFor 统一拦截下载。
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if navigationAction.targetFrame == nil || !(navigationAction.targetFrame?.isMainFrame ?? false) {
+            webView.load(navigationAction.request)
+        }
+        return nil
+    }
 
     /// 摄像头 / 麦克风：系统层已授权则直接 `.grant`（不再出现网页内二次权限面板）；系统已拒绝或受限则 `.deny`；尚未决定则 `.prompt`。
     /// 网页地理定位 `navigator.geolocation`：公开 `WKUIDelegate` 无对应决策方法，无法像媒体这样 `.grant`；仅能通过 `NSLocationWhenInUseUsageDescription` 与 `prepareWebGeolocationAuthorization()` 尽早完成系统层授权。
@@ -325,7 +341,7 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
                 receivedChunkIndexes: [],
                 buffer: Data()
             )
-            showDownloadStartedHint()
+            showHint("开始下载…")
 
         case "chunk":
             guard var state = blobDownloads[id] else { return }
@@ -396,14 +412,22 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
         let downloadableExtensions: Set<String> = [
             // 图片
             "png", "jpg", "jpeg", "gif", "bmp", "webp", "heic",
+            "tif", "tiff", "svg", "ico", "psd", "ai", "eps",
             // 视频
             "mp4", "mov", "m4v", "avi", "mkv",
             // 音频
             "mp3", "wav", "aac", "m4a", "flac",
             // 文本/文档
             "txt", "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "csv", "json", "xml", "md", "epub",
             // 压缩
-            "zip", "rar", "7z"
+            "zip", "rar", "7z", "gz", "tar", "bz2", "xz", "iso",
+            // 精雕 / 3D / CAD（主公业务格式，原来漏了 .vs3d 导致点下载无反应）
+            "vs3d", "vsm", "jdp", "jdw", "stl", "obj", "glb", "gltf", "ply",
+            "3ds", "fbx", "3mf", "dxf", "dwg", "stp", "step", "iges", "igs",
+            "vsd", "vsdx", "sat", "sldprt",
+            // 安装包 / 其他
+            "apk", "ipa", "exe", "msi", "dmg", "bin", "dat", "torrent"
         ]
 
         return downloadableExtensions.contains(pathExtension)
@@ -427,30 +451,43 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
     /// 使用 URLSession 下载文件并弹出系统分享面板，让用户保存到「文件」或其他 App
     private func downloadFile(from url: URL) {
         print("start downloading file: \(url.absoluteString)")
-        showDownloadStartedHint()
-        let task = URLSession.shared.downloadTask(with: url) { [weak self] tempURL, response, error in
+        showHint("开始下载…")
+        // Cloudflare 的浏览器完整性检查会拦 CFNetwork 默认 UA（error code 1010），
+        // 这里显式用 Safari UA；/d/ 直链带 sign，不需要 Authorization。
+        var request = URLRequest(url: url)
+        request.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 900
+        let task = URLSession.shared.downloadTask(with: request) { [weak self] tempURL, response, error in
             if let error = error {
                 print("download failed: \(error.localizedDescription)")
+                self?.showHint("下载失败: \(error.localizedDescription)", ok: false)
                 return
             }
 
             guard let tempURL = tempURL else {
                 print("download failed: temporary file not found")
+                self?.showHint("下载失败: 未取到临时文件", ok: false)
                 return
             }
 
-            // get file name from response or URL
+            // 优先用原始链接里的中文文件名（AList /d/ 路径），避免天翼 302 之后
+            // 落到 UUID.vs3d，或 Content-Disposition 里的乱码名。
+            let originalName = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
             let suggestedName = (response as? HTTPURLResponse)?
                 .allHeaderFields["Content-Disposition"] as? String
 
             let fileName: String
-            if let suggestedName,
-               let range = suggestedName.range(of: "filename=")
+            if !originalName.isEmpty && originalName.lowercased() != "d" {
+                fileName = originalName
+            } else if let suggestedName,
+                      let range = suggestedName.range(of: "filename=")
             {
                 let namePart = String(suggestedName[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: "\"; "))
-                fileName = namePart.isEmpty ? url.lastPathComponent : namePart
+                fileName = namePart.isEmpty ? "file" : namePart
             } else {
-                fileName = url.lastPathComponent.isEmpty ? "file" : url.lastPathComponent
+                fileName = "file"
             }
 
             let fileManager = FileManager.default
@@ -477,8 +514,8 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
         task.resume()
     }
 
-    /// show "start downloading" hint (disappears after 2 seconds)
-    private func showDownloadStartedHint() {
+    /// show a short on-screen hint (disappears after 2-3 seconds)
+    private func showHint(_ text: String, ok: Bool = true) {
         DispatchQueue.main.async {
             guard let window = UIApplication.shared.connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
@@ -486,10 +523,11 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
                 .first(where: { $0.isKeyWindow }) else { return }
 
             let label = UILabel()
-            label.text = "start downloading..."
-            label.font = .systemFont(ofSize: 15, weight: .medium)
+            label.text = text
+            label.numberOfLines = 0
+            label.font = .systemFont(ofSize: 14, weight: .medium)
             label.textColor = .white
-            label.backgroundColor = .systemBlue
+            label.backgroundColor = ok ? .systemBlue : .systemRed
             label.textAlignment = .center
             label.layer.cornerRadius = 8
             label.clipsToBounds = true
@@ -506,7 +544,7 @@ class Coordinator: NSObject, UIScrollViewDelegate, WKNavigationDelegate, WKUIDel
             window.addSubview(label)
 
             UIView.animate(withDuration: 0.25, animations: { label.alpha = 1 })
-            UIView.animate(withDuration: 0.25, delay: 1.75, options: [], animations: { label.alpha = 0 }) { _ in
+            UIView.animate(withDuration: 0.25, delay: ok ? 1.75 : 2.75, options: [], animations: { label.alpha = 0 }) { _ in
                 label.removeFromSuperview()
             }
         }
